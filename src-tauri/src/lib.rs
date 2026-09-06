@@ -1,4 +1,5 @@
 pub mod search;
+pub mod shell;
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -680,6 +681,25 @@ async fn delete_node_recursive(
 }
 
 #[tauri::command]
+async fn shell_exec(
+    manager: State<'_, ConnectionManager>,
+    conn_id: String,
+    line: String,
+) -> Result<String, String> {
+    let client = manager.client(&conn_id)?;
+    let output = shell::execute(&client, &line).await?;
+    // 树结构变更命令执行成功后标记搜索索引过期，与 create_node/delete_node 保持一致。
+    let command = line.split_whitespace().next().unwrap_or("");
+    if matches!(
+        command.to_ascii_lowercase().as_str(),
+        "create" | "delete" | "deleteall" | "rmr"
+    ) {
+        manager.search_manager.mark_dirty(&conn_id)?;
+    }
+    Ok(output)
+}
+
+#[tauri::command]
 async fn get_acl(
     manager: State<'_, ConnectionManager>,
     conn_id: String,
@@ -940,6 +960,7 @@ pub fn run() {
             create_node,
             delete_node,
             delete_node_recursive,
+            shell_exec,
             get_acl,
             set_acl,
             watch_children,

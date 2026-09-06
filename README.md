@@ -25,6 +25,7 @@ Existing ZooKeeper GUI tools are either outdated, sluggish, or locked behind pay
 - **Full CRUD** — create / delete nodes, recursive delete with confirmation
 - **ACL management** — view and edit node ACLs (world / auth / digest / ip schemes)
 - **Watcher event stream** — every node change (created / deleted / data changed / children changed) shows up in a live event log with zxid
+- **zkCli shell** — built-in terminal that runs familiar zkCli commands (`ls` / `get` / `set` / `create` / `delete` / `deleteall` / `stat` / `getAcl` / `setAcl` / `addauth` / `whoami`) against the connected cluster, with command history and zkCli-style output
 - **Session monitoring** — connection state changes pushed in real time
 - **Connection manager** — save, organize and reconnect to clusters instantly
 
@@ -69,10 +70,10 @@ cd src-tauri && cargo test --test zk_smoke
 - [x] Multi-connection tabs, znode tree browsing, data editing
 - [x] Watcher event stream & session state monitoring
 - [x] Node CRUD, recursive delete, ACL management
-- [ ] Authentication (digest / SASL) connections
-- [ ] Node search & import/export
-- [ ] Cluster monitoring dashboard (`mntr` four-letter words)
-- [ ] Auto-updater
+- [x] Authentication (digest / SASL) connections
+- [x] Node search (index-based, Spotlight-style)
+- [x] zkCli shell
+- [ ] Import/export
 
 ## Contributing
 
@@ -86,7 +87,7 @@ MIT
 
 ## 中文介绍
 
-**ZooPeek 是一个现代化的 ZooKeeper 桌面客户端**，解决 PrettyZoo 等传统工具界面老旧、卡顿、连接状态不清晰的问题。
+**ZooPeek 是一个现代化的 ZooKeeper 桌面客户端**
 
 ### 核心特性
 
@@ -97,6 +98,7 @@ MIT
 - **完整 CRUD**：节点增删改查、递归删除（带确认）、ACL 权限管理
 - **数据编辑**：JSON 一键格式化；二进制数据自动检测并锁定只读，防止误保存损坏
 - **实时刷新**：基于 ZK watcher 的事件驱动刷新，节点变化无需手动刷新
+- **zkCli Shell**：内置命令行终端，直接对已连接集群执行熟悉的 zkCli 命令（ls/get/set/create/delete/deleteall/stat/getAcl/setAcl/addauth/whoami），支持命令历史（↑/↓），输出格式对齐 zkCli
 
 ### 下载安装
 
