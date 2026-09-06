@@ -70,6 +70,16 @@ export interface EventItem {
   text: string;
 }
 
+export type ShellEntryKind = "cmd" | "out" | "err" | "info";
+
+export interface ShellEntry {
+  id: number;
+  kind: ShellEntryKind;
+  text: string;
+}
+
+export type BottomPanel = "events" | "shell";
+
 export interface ConnectionTab {
   id: string;
   name: string;
@@ -101,6 +111,13 @@ export interface ConnectionTab {
   searchLoading: boolean;
   searchError: string;
   revealSeq: number;
+  // --- Shell（zkCli 命令行）：历史与输出均保存在前端，后端 shell_exec 无状态 ---
+  bottomPanel: BottomPanel;
+  shellEntries: ShellEntry[];
+  shellHistory: string[];
+  shellHistoryIndex: number;
+  shellDraft: string;
+  shellRunning: boolean;
 }
 
 export interface NodeEvent {
@@ -543,6 +560,12 @@ export async function openConnection(
       searchLoading: false,
       searchError: "",
       revealSeq: 0,
+      bottomPanel: "events",
+      shellEntries: [],
+      shellHistory: [],
+      shellHistoryIndex: -1,
+      shellDraft: "",
+      shellRunning: false,
     });
     store.tabs.push(tab);
   }
@@ -980,5 +1003,101 @@ export async function revealPath(
   await selectNode(tab, [targetPath]);
   await nextTick();
   return true;
+}
+
+// ── Shell（zkCli 命令行） ─────────────────────────────────────
+
+let shellEntrySeq = 0;
+
+function appendShellEntry(
+  tab: ConnectionTab,
+  kind: ShellEntryKind,
+  text: string
+): void {
+  tab.shellEntries.push({ id: ++shellEntrySeq, kind, text });
+  if (tab.shellEntries.length > 500) {
+    tab.shellEntries.splice(0, tab.shellEntries.length - 500);
+  }
+}
+
+/** 会改变树结构或数据的命令：执行成功后同步搜索脏标记并记入事件流。 */
+const SHELL_MUTATING = /^(create|delete|deleteall|rmr|set|setacl|addauth)\b/i;
+const SHELL_TREE_MUTATING = /^(create|delete|deleteall|rmr)\b/i;
+
+export async function runShellCommand(tab: ConnectionTab): Promise<void> {
+  const line = tab.shellDraft.trim();
+  if (!line || tab.shellRunning) return;
+  appendShellEntry(tab, "cmd", `[zk: ${tab.servers}] ${line}`);
+  if (tab.shellHistory[tab.shellHistory.length - 1] !== line) {
+    tab.shellHistory.push(line);
+    if (tab.shellHistory.length > 200) tab.shellHistory.shift();
+  }
+  tab.shellHistoryIndex = -1;
+  tab.shellDraft = "";
+
+  const command = line.split(/\s+/)[0].toLowerCase();
+  // 本地命令：不依赖连接
+  if (command === "clear") {
+    tab.shellEntries = [];
+    return;
+  }
+  if (command === "history") {
+    tab.shellHistory.forEach((item, index) =>
+      appendShellEntry(tab, "out", `${index} - ${item}`)
+    );
+    return;
+  }
+  if (command === "quit" || command === "close") {
+    appendShellEntry(tab, "info", "正在断开连接…");
+    await disconnectConnection(tab);
+    return;
+  }
+  if (!canLoadTree(tab.status)) {
+    appendShellEntry(tab, "err", "连接未就绪，无法执行命令");
+    return;
+  }
+
+  tab.shellRunning = true;
+  try {
+    const output = await invoke<string>("shell_exec", { connId: tab.id, line });
+    if (output) {
+      for (const outputLine of output.split("\n")) {
+        appendShellEntry(tab, "out", outputLine);
+      }
+    }
+    if (SHELL_MUTATING.test(line)) {
+      appendEvent(tab, `Shell 执行：${line}`);
+      // 树结构变化使搜索快照过期（后端已 mark_dirty，未建索引时为 no-op）
+      if (SHELL_TREE_MUTATING.test(line) && tab.searchIndexStatus) {
+        tab.searchIndexStatus.dirty = true;
+      }
+    }
+  } catch (error) {
+    appendShellEntry(tab, "err", formatOperationError(error));
+  } finally {
+    tab.shellRunning = false;
+  }
+}
+
+/** ↑/↓ 翻阅命令历史：向下越过最后一条时恢复空输入。 */
+export function shellHistoryNavigate(
+  tab: ConnectionTab,
+  direction: 1 | -1
+): void {
+  const length = tab.shellHistory.length;
+  if (length === 0) return;
+  if (tab.shellHistoryIndex === -1) {
+    if (direction === 1) return;
+    tab.shellHistoryIndex = length - 1;
+  } else {
+    tab.shellHistoryIndex += direction;
+    if (tab.shellHistoryIndex >= length) {
+      tab.shellHistoryIndex = -1;
+      tab.shellDraft = "";
+      return;
+    }
+    if (tab.shellHistoryIndex < 0) tab.shellHistoryIndex = 0;
+  }
+  tab.shellDraft = tab.shellHistory[tab.shellHistoryIndex];
 }
 
