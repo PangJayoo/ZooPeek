@@ -54,12 +54,14 @@ import {
   openConnection,
   removeAclEntry,
   revealPath,
+  runShellCommand,
   saveConnection,
   saveNodeAcl,
   saveNodeData,
   searchInTab,
   selectNode,
   setPasswordRequester,
+  shellHistoryNavigate,
   startSearchIndex,
   store,
   tabById,
@@ -86,6 +88,8 @@ const appError = ref("");
 const treeInstRefs: Record<string, any> = {};
 const scrollbarRefs: Record<string, any> = {};
 const searchInputRefs: Record<string, any> = {};
+const shellScrollRefs: Record<string, HTMLElement> = {};
+const shellInputRefs: Record<string, HTMLElement> = {};
 const searchScopeCollapsed = reactive<Record<string, boolean>>({});
 const searchDebounceTimers = new Map<string, number>();
 
@@ -145,6 +149,33 @@ function setScrollbarRef(tabId: string, el: any): void {
 function setSearchInputRef(tabId: string, el: any): void {
   if (el) searchInputRefs[tabId] = el;
   else delete searchInputRefs[tabId];
+}
+
+// ── Shell 面板 ─────────────────────────────────────────────
+function setShellScrollRef(tabId: string, el: any): void {
+  if (el) shellScrollRefs[tabId] = el as HTMLElement;
+  else delete shellScrollRefs[tabId];
+}
+function setShellInputRef(tabId: string, el: any): void {
+  if (el) shellInputRefs[tabId] = el as HTMLElement;
+  else delete shellInputRefs[tabId];
+}
+function scrollShellToBottom(tabId: string): void {
+  const el = shellScrollRefs[tabId];
+  if (el) el.scrollTop = el.scrollHeight;
+}
+async function runShell(tab: ConnectionTab): Promise<void> {
+  await runShellCommand(tab);
+  await nextTick();
+  scrollShellToBottom(tab.id);
+}
+async function switchBottomPanel(tab: ConnectionTab, panel: "events" | "shell"): Promise<void> {
+  tab.bottomPanel = panel;
+  await nextTick();
+  if (panel === "shell") {
+    scrollShellToBottom(tab.id);
+    shellInputRefs[tab.id]?.focus();
+  }
 }
 
 // ── 搜索结果浮层高度：随树面板实际空间自适应 ─────────────────
@@ -1125,8 +1156,32 @@ onUnmounted(() => {
 
               <div class="pane-splitter-row" @mousedown="(e: MouseEvent) => startDrag(e, 'event')" title="拖动调整事件流高度"></div>
               <section class="event-pane panel" :style="{ height: eventHeight + 'px' }">
-                <div class="panel-title">事件流</div>
-                <n-scrollbar class="event-scroll">
+                <div class="panel-title bottom-panel-title">
+                  <div class="bottom-tabs">
+                    <button
+                      class="bottom-tab"
+                      :class="{ active: tab.bottomPanel === 'events' }"
+                      @click="switchBottomPanel(tab, 'events')"
+                    >
+                      事件流
+                    </button>
+                    <button
+                      class="bottom-tab"
+                      :class="{ active: tab.bottomPanel === 'shell' }"
+                      @click="switchBottomPanel(tab, 'shell')"
+                    >
+                      Shell
+                    </button>
+                  </div>
+                  <n-text
+                    v-if="tab.bottomPanel === 'shell'"
+                    depth="3"
+                    class="shell-hint"
+                  >
+                    zkCli 命令，help 查看支持列表
+                  </n-text>
+                </div>
+                <n-scrollbar v-if="tab.bottomPanel === 'events'" class="event-scroll">
                   <div v-if="tab.events.length" class="event-list">
                     <div v-for="event in tab.events" :key="event.id" class="event-row">
                       <span class="event-time">{{ event.time }}</span>
@@ -1135,6 +1190,39 @@ onUnmounted(() => {
                   </div>
                   <n-empty v-else size="small" description="暂无事件" />
                 </n-scrollbar>
+                <template v-else>
+                  <div
+                    :ref="(el: any) => setShellScrollRef(tab.id, el)"
+                    class="shell-scroll"
+                  >
+                    <div
+                      v-for="entry in tab.shellEntries"
+                      :key="entry.id"
+                      class="shell-line"
+                      :class="`shell-${entry.kind}`"
+                    >{{ entry.text || " " }}</div>
+                    <n-empty
+                      v-if="!tab.shellEntries.length"
+                      size="small"
+                      description="输入 zkCli 命令开始操作，help 查看支持列表"
+                    />
+                  </div>
+                  <div class="shell-input-row">
+                    <span class="shell-prompt">zk&gt;</span>
+                    <input
+                      :ref="(el: any) => setShellInputRef(tab.id, el)"
+                      v-model="tab.shellDraft"
+                      class="shell-input"
+                      :disabled="!canLoadTree(tab.status) || tab.shellRunning"
+                      :placeholder="canLoadTree(tab.status) ? 'ls /' : '连接未就绪'"
+                      spellcheck="false"
+                      autocomplete="off"
+                      @keydown.enter="runShell(tab)"
+                      @keydown.up.prevent="shellHistoryNavigate(tab, -1)"
+                      @keydown.down.prevent="shellHistoryNavigate(tab, 1)"
+                    />
+                  </div>
+                </template>
               </section>
             </div>
           </n-tab-pane>
@@ -1566,6 +1654,92 @@ body {
 .event-time {
   flex: 0 0 auto;
   color: #7e8a9a;
+}
+
+/* ── 底部面板切换（事件流 / Shell） ─────────────────────── */
+.bottom-panel-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.bottom-tabs {
+  display: flex;
+  gap: 4px;
+}
+.bottom-tab {
+  padding: 2px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.bottom-tab:hover {
+  color: rgba(255, 255, 255, 0.82);
+}
+.bottom-tab.active {
+  background: rgba(36, 200, 219, 0.16);
+  color: #24c8db;
+}
+.shell-hint {
+  font-size: 11px;
+}
+
+/* ── Shell 终端 ─────────────────────────────────────────── */
+.shell-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+.shell-line {
+  padding: 1px 2px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.shell-cmd {
+  color: #24c8db;
+  font-weight: 600;
+}
+.shell-err {
+  color: #e88080;
+}
+.shell-info {
+  color: #7e8a9a;
+}
+.shell-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.shell-prompt {
+  color: #24c8db;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+.shell-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.88);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+.shell-input:disabled {
+  color: rgba(255, 255, 255, 0.35);
+  cursor: not-allowed;
 }
 
 .welcome {

@@ -10,6 +10,8 @@ const instanceRegistries = [
   "searchInputRefs",
   "treePaneRefs",
   "spotlightRefs",
+  "shellScrollRefs",
+  "shellInputRefs",
 ];
 
 test("template ref registries are non-reactive", () => {
